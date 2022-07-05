@@ -696,6 +696,37 @@ func (p *Handle) WritePacketData(data []byte) (err error) {
 	return p.pcapSendpacket(data)
 }
 
+// 假设packets的每一行是一个报文， 报文长度固定为 onePacketLength
+func (p *Handle) WriteQueuePacket(packets [][]byte, onePacketLength int, sync int) (err error) {
+	// 1. 申请空间
+	sendQueue, err := p.pcapSendqueuealloc(uint64(len(packets) * onePacketLength))
+	if err != nil {
+		fmt.Println("err when send-queue-alloc")
+		return err
+	}
+	defer p.pcapSendqueuedestroy(sendQueue)
+	// 2. 填入数据
+	for _, pkt := range packets {
+		if len(pkt) == 0 {
+			return errors.New("packet is empty")
+		}
+		err = p.pcapSendqueuequeue(sendQueue, pkt)
+		if err != nil {
+			fmt.Printf("err when send-queue-queue\n")
+			return err
+		}
+	}
+
+	// 3. 发送
+	// 非零则按时间戳发送
+	err = p.pcapSendqueuetransmit(sendQueue, sync)
+	if err != nil {
+		fmt.Printf("err when send-queue-transmit\n")
+		return err
+	}
+	return err
+}
+
 // Direction is used by Handle.SetDirection.
 type Direction uint8
 
