@@ -131,6 +131,13 @@ var (
 	pcapFreealldevsPtr,
 	pcapFindalldevsPtr,
 	pcapSendpacketPtr,
+	// pcap_send_queue 是一个结构体
+	//pcapSendpacketqueuePtr,
+	// pcap_send_queue需要调用的
+	pcapSendqueueallocPtr,
+	pcapSendqueuedestroyPtr,
+	pcapSendqueuequeuePtr,
+	pcapSendqueuetransmitPtr,
 	pcapSetdirectionPtr,
 	pcapSnapshotPtr,
 	pcapTstampTypeValToNamePtr,
@@ -223,6 +230,15 @@ func LoadWinPCAP() error {
 	pcapFreealldevsPtr = mustLoad("pcap_freealldevs")
 	pcapFindalldevsPtr = mustLoad("pcap_findalldevs")
 	pcapSendpacketPtr = mustLoad("pcap_sendpacket")
+	// =====================================
+	// add send_queue
+	// pcap_send_queue 是一个结构体
+	//pcapSendpacketqueuePtr = mustLoad("pcap_send_queue")
+	pcapSendqueueallocPtr = mustLoad("pcap_sendqueue_alloc")
+	pcapSendqueuedestroyPtr = mustLoad("pcap_sendqueue_destroy")
+	pcapSendqueuequeuePtr = mustLoad("pcap_sendqueue_queue")
+	pcapSendqueuetransmitPtr = mustLoad("pcap_sendqueue_transmit")
+	// ===========================================
 	pcapSetdirectionPtr = mustLoad("pcap_setdirection")
 	pcapSnapshotPtr = mustLoad("pcap_snapshot")
 	//libpcap <1.2 doesn't have pcap_*_tstamp_* functions
@@ -655,6 +671,12 @@ func pcapFindAllDevs() (pcapDevices, error) {
 }
 
 func (p *Handle) pcapSendpacket(data []byte) error {
+	//
+	//int pcap_sendpacket	(	pcap_t * 	p,
+	//	u_char * 	buf,
+	//	int 	size
+	//)
+	// 返回值是一个int
 	ret, _, _ := syscall.Syscall(pcapSendpacketPtr, 3, uintptr(p.cptr), uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)))
 	if pcapCint(ret) < 0 {
 		return p.pcapGeterr()
@@ -662,6 +684,85 @@ func (p *Handle) pcapSendpacket(data []byte) error {
 	return nil
 }
 
+//==================================================================
+// allocate a queue for raw packets
+// 指定新的发送队列的大小
+// 返回一个队列
+func (p *Handle) pcapSendqueuealloc(memsize uint64) (*pcapSendQueue, error) {
+	//函数签名：   pcap_send_queue * 	pcap_sendqueue_alloc (u_int memsize)
+	//sendQueuePtr, _, _ := syscall.SyscallN(pcapSendqueueallocPtr, uintptr(memsize*1500))
+	//if pcapCint(sendQueuePtr) == 0 {
+	//	return nil, errors.New("alloc a send queue error")
+	//}
+	//// sendQueuePtr 是一块内存空间的首地址
+	//return &pcapSendQueue{MaxLen: memsize, Len: 0, Buffer: sendQueuePtr}, nil
+
+	buffer := make([][]byte, 0, memsize)
+	return &pcapSendQueue{MaxLen: memsize, Len: 0, Buffer: buffer}, nil
+}
+
+func (p *Handle) pcapSendqueuedestroy(queue *pcapSendQueue) {
+	// 函数签名： void pcap_sendqueue_destroy	(	pcap_send_queue * 	queue	 )
+
+	// 释放空间
+	syscall.SyscallN(pcapSendqueuedestroyPtr, uintptr(unsafe.Pointer(queue)))
+
+	//	手动释放
+	//queue = nil
+
+}
+
+//add raw packets to the queue  in pcap format
+// 添加一个packet到发送队列中
+func (p *Handle) pcapSendqueuequeue(queue *pcapSendQueue, pktData []byte) error {
+	//var hdr pcapPkthdr
+	//	pcap_pkthdr 结构，包含当前包的时间戳和长度
+	//	pkt_data 只想包数据缓存区
+
+	// 例子，来自于 pcapOfflineFilter 函数
+	//var hdr pcapPkthdr
+	//hdr.Ts.Sec = int32(ci.Timestamp.Unix())
+	//hdr.Ts.Usec = int32(ci.Timestamp.Nanosecond() / 1000)
+	//hdr.Caplen = uint32(len(data)) // Trust actual length over ci.Length.
+	//hdr.Len = uint32(ci.Length)
+	//e, _, _ := syscall.Syscall(pcapOfflineFilterPtr, 3, uintptr(unsafe.Pointer(&b.bpf.bpf)), uintptr(unsafe.Pointer(&hdr)), uintptr(unsafe.Pointer(&data[0])))
+	//return e != 0
+
+	var hdr pcapPkthdr
+	//hdr.Ts.Sec = int32(Timestamp.Unix())
+	hdr.Ts.Sec = int32(time.Now().Unix())
+	hdr.Ts.Usec = int32(time.Now().Nanosecond() / 1000)
+	//hdr.Ts.Usec = int32(Timestamp.Nanosecond() / 1000)
+	hdr.Caplen = uint32(len(pktData)) // Trust actual length over ci.Length.
+	// 当前包的长度
+	hdr.Len = uint32(len(pktData))
+
+	ret, _, _ := syscall.SyscallN(pcapSendqueuequeuePtr, uintptr(unsafe.Pointer(queue)), uintptr(unsafe.Pointer(&hdr)), uintptr(unsafe.Pointer(&pktData[0])))
+
+	if pcapCint(ret) < 0 {
+		return p.pcapGeterr()
+	}
+	return nil
+
+}
+
+// send queue
+func (p *Handle) pcapSendqueuetransmit(queue *pcapSendQueue, sync int) error {
+	// 函数签名
+	//u_int pcap_sendqueue_transmit	(	pcap_t * 	p,
+	//	pcap_send_queue * 	queue,
+	//	int 	sync
+	//)
+	// sendPacket的示例
+	//ret, _, _ := syscall.Syscall(pcapSendpacketPtr, 3, uintptr(p.cptr), uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)))
+	ret, _, _ := syscall.SyscallN(pcapSendqueuetransmitPtr, uintptr(p.cptr), uintptr(unsafe.Pointer(queue)), uintptr(sync))
+	if pcapCint(ret) < 0 {
+		return p.pcapGeterr()
+	}
+	return nil
+}
+
+//===============================================================
 func (p *Handle) pcapSetdirection(direction Direction) error {
 	status, _, _ := syscall.Syscall(pcapSetdirectionPtr, 2, uintptr(p.cptr), uintptr(direction), 0)
 	if pcapCint(status) < 0 {

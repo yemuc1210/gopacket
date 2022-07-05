@@ -74,3 +74,18 @@ type pcapAddr struct {
 	Broadaddr *syscall.RawSockaddr
 	Dstaddr   *syscall.RawSockaddr
 }
+
+
+type pcapSendQueue struct {
+	// 队列的最大长度
+	// 源码：u_int maxlen
+	MaxLen uint64
+	// 队列当前长度
+	// 源码： u_int len
+	Len uint64
+	// buffer, 包含待发送的包，
+	// 源码： char* buffer
+	//Buffer []byte
+	Buffer [][]byte
+	//Buffer uintptr
+}
